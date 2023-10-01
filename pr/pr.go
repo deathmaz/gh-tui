@@ -13,10 +13,16 @@ type Author struct {
 	Name  string
 }
 
+type CommitAuthor struct {
+	Login string `json:"login"`
+	Name  string `json:"name"`
+}
+
 type Commit struct {
-	MessageBody     string    `json:"messageBody"`
-	MessageHeadline string    `json:"messageHeadline"`
-	CommitedDate    time.Time `json:"committedDate"`
+	MessageBody     string         `json:"messageBody"`
+	MessageHeadline string         `json:"messageHeadline"`
+	CommitedDate    time.Time      `json:"committedDate"`
+	Authors         []CommitAuthor `json:"authors"`
 }
 
 type ReviewRequest struct {
@@ -77,6 +83,25 @@ func (d Details) Render() string {
 	}
 
 	s.WriteString("\n")
+	s.WriteString(style.Bold(true).Render("Commits:"))
+	s.WriteString("\n")
+
+	for _, commit := range d.Commits {
+		s.WriteString("• ")
+		s.WriteString(style.Foreground(lipgloss.Color("247")).Render(commit.MessageHeadline))
+		s.WriteString(" by ")
+		for _, author := range commit.Authors {
+			if author.Login != "" {
+				s.WriteString(author.Login)
+			} else {
+				s.WriteString(author.Name)
+			}
+		}
+		s.WriteString("\n")
+	}
+
+	s.WriteString("\n")
+
 	s.WriteString(style.Bold(true).Render("Changed files:"))
 	s.WriteString("\n")
 

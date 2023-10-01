@@ -392,6 +392,7 @@ func main() {
 	d.Styles.SelectedTitle.Background(lipgloss.Color("#494d65"))
 	d.Styles.SelectedDesc.Background(lipgloss.Color("#494d65"))
 	list := list.New(items, d, 0, 0)
+	list.Title = "The list of pull requests:"
 
 	a := app{
 		list:        list,
