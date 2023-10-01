@@ -14,8 +14,10 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	gh "github.com/cli/go-gh"
+	"github.com/cli/go-gh/pkg/browser"
 	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
+	"github.com/deathmaz/gh-tui/pr"
 )
 
 var (
@@ -85,24 +87,10 @@ type PullRequestDetails struct {
 	} `graphql:"reviewRequests(first:10)"`
 }
 
-type PullRequestDetailsRequest struct {
-	Url         string
-	Body        string
-	State       string
-	CreatedAt   string
-	Title       string
-	Number      int
-	HeadRefName string
-	BaseRefName string
-	Author      struct {
-		Login string
-	}
-	ReviewRequests []ReviewRequest `graphql:"reviewRequests(first:10)"`
-}
-
 type item struct {
 	title, desc string
 	Number      int
+	Url         string
 }
 
 func (i item) Title() string       { return i.title }
@@ -110,12 +98,12 @@ func (i item) Description() string { return i.desc }
 func (i item) FilterValue() string { return i.title }
 
 type app struct {
-	list         list.Model
-	prList       []PullRequest
-	err          error
-	repo         repo
-	currentView  string
-	prDetails    PullRequestDetails
+	list        list.Model
+	err         error
+	repo        repo
+	currentView string
+	// TODO: remove ?
+	PullDetails  PullRequestDetails
 	changedFiles string
 	viewport     viewport.Model
 	ready        bool
@@ -139,9 +127,10 @@ type PrDescription struct {
 }
 
 type (
-	listMsg []PullRequest
-	prMsg   PrDescription
-	errMsg  struct{ err error }
+	listMsg      []PullRequest
+	prMsg        PrDescription
+	prDetailsMsg pr.Details
+	errMsg       struct{ err error }
 )
 
 func (e errMsg) Error() string { return e.err.Error() }
@@ -221,6 +210,25 @@ func (m app) getPull(number int) tea.Msg {
 	})
 }
 
+func (m app) getPrDetails(number int) tea.Msg {
+	args := []string{
+		"pr",
+		"view",
+		fmt.Sprintf("%d", number),
+		"-R",
+		m.repo.NameWithOwner,
+		"--json",
+		"reviewDecision,reviewRequests,reviews,statusCheckRollup,title,url,number,author,baseRefName,body,changedFiles,files,commits,headRefName",
+	}
+	stdOut, _, err := gh.Exec(args...)
+	if err != nil {
+		return errMsg{err: err}
+	}
+	prDetails := pr.Details{}
+	json.Unmarshal([]byte(stdOut.String()), &prDetails)
+	return prDetailsMsg(prDetails)
+}
+
 func (m app) View() string {
 	if m.currentView == prs {
 		return docStyle.Render(m.list.View())
@@ -240,6 +248,8 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "q", "ctrl+c", "esc":
+			return m, tea.Quit
 		case "d":
 			selItem := m.list.SelectedItem().(item)
 			c := exec.Command(
@@ -257,8 +267,17 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "i":
 			return m, func() tea.Msg {
 				item := m.list.SelectedItem().(item)
-				return m.getPull(item.Number)
+				return m.getPrDetails(item.Number)
+				// return m.getPull(item.Number)
 			}
+		case "o":
+			b := browser.New("", os.Stdout, os.Stdin)
+			item := m.list.SelectedItem().(item)
+			err := b.Browse(item.Url)
+			if err != nil {
+				log.Fatal(err)
+			}
+
 		case "h":
 			if m.currentView == description {
 				m.currentView = prs
@@ -287,31 +306,34 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.Width = msg.Width
 			m.viewport.Height = msg.Height - verticalMarginHeight
 		}
+	case prDetailsMsg:
+		m.currentView = description
+		m.viewport.SetContent(lipgloss.NewStyle().Padding(0, 1).Render(pr.Details(msg).Render()))
 
 	case prMsg:
-		m.prDetails = PullRequestDetails(msg.details)
+		m.PullDetails = PullRequestDetails(msg.details)
 		m.changedFiles = msg.changedFiles
 		m.currentView = description
 
 		s := strings.Builder{}
-		s.WriteString(m.prDetails.Title)
+		s.WriteString(m.PullDetails.Title)
 		s.WriteString("\n")
 		s.WriteString(fmt.Sprintf(
 			"%s wants to merge xx commits into %s from %s",
-			m.prDetails.Author.Login,
-			m.prDetails.BaseRefName,
-			m.prDetails.HeadRefName,
+			m.PullDetails.Author.Login,
+			m.PullDetails.BaseRefName,
+			m.PullDetails.HeadRefName,
 		))
 		s.WriteString("\n")
 
 		body := "No description provided"
-		if m.prDetails.Body != "" {
-			body = m.prDetails.Body
+		if m.PullDetails.Body != "" {
+			body = m.PullDetails.Body
 		}
 		s.WriteString(body)
 		s.WriteString("\n")
 
-		for _, r := range m.prDetails.ReviewRequests.Nodes {
+		for _, r := range m.PullDetails.ReviewRequests.Nodes {
 			s.WriteString(fmt.Sprintf("%s", r.RequestedReviewer.User.Login))
 			s.WriteString("\n")
 		}
@@ -337,10 +359,10 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					p.Author.Login,
 				),
 				Number: p.Number,
+				Url:    p.Url,
 			})
 		}
 		m.list.SetItems(items)
-		m.prList = msg
 	case errMsg:
 		fmt.Printf("%s", msg)
 		m.err = msg
@@ -360,9 +382,19 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
 	var items []list.Item
+	d := list.NewDefaultDelegate()
+	d.Styles.SelectedTitle.BorderForeground(lipgloss.Color("#494d65"))
+	d.Styles.SelectedDesc.BorderForeground(lipgloss.Color("#494d65"))
+	d.Styles.SelectedTitle.Foreground(lipgloss.Color("255"))
+	d.Styles.SelectedDesc.Foreground(lipgloss.Color("247"))
+	d.Styles.SelectedTitle.Background(lipgloss.Color("#494d65"))
+	d.Styles.SelectedDesc.Background(lipgloss.Color("#494d65"))
+	list := list.New(items, d, 0, 0)
+
 	a := app{
-		list:        list.New(items, list.NewDefaultDelegate(), 0, 0),
+		list:        list,
 		repo:        repo,
 		currentView: prs,
 	}
