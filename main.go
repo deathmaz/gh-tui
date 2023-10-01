@@ -10,11 +10,26 @@ import (
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	gh "github.com/cli/go-gh"
 	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
+)
+
+var (
+	titleStyle = func() lipgloss.Style {
+		b := lipgloss.RoundedBorder()
+		b.Right = "├"
+		return lipgloss.NewStyle().BorderStyle(b).Padding(0, 1)
+	}()
+
+	infoStyle = func() lipgloss.Style {
+		b := lipgloss.RoundedBorder()
+		b.Left = "┤"
+		return titleStyle.Copy().BorderStyle(b)
+	}()
 )
 
 type Owner struct {
@@ -102,6 +117,20 @@ type app struct {
 	currentView  string
 	prDetails    PullRequestDetails
 	changedFiles string
+	viewport     viewport.Model
+	ready        bool
+}
+
+func (m app) headerView() string {
+	title := titleStyle.Render("Pr details")
+	line := strings.Repeat("─", max(0, m.viewport.Width-lipgloss.Width(title)))
+	return lipgloss.JoinHorizontal(lipgloss.Center, title, line)
+}
+
+func (m app) footerView() string {
+	info := infoStyle.Render(fmt.Sprintf("%3.f%%", m.viewport.ScrollPercent()*100))
+	line := strings.Repeat("─", max(0, m.viewport.Width-lipgloss.Width(info)))
+	return lipgloss.JoinHorizontal(lipgloss.Center, line, info)
 }
 
 type PrDescription struct {
@@ -196,33 +225,7 @@ func (m app) View() string {
 	if m.currentView == prs {
 		return docStyle.Render(m.list.View())
 	} else if m.currentView == description {
-		s := strings.Builder{}
-		s.WriteString(m.prDetails.Title)
-		s.WriteString("\n")
-		s.WriteString(fmt.Sprintf(
-			"%s wants to merge xx commits into %s from %s",
-			m.prDetails.Author.Login,
-			m.prDetails.BaseRefName,
-			m.prDetails.HeadRefName,
-		))
-		s.WriteString("\n")
-
-		body := "No description provided"
-		if m.prDetails.Body != "" {
-			body = m.prDetails.Body
-		}
-		s.WriteString(body)
-		s.WriteString("\n")
-
-		for _, r := range m.prDetails.ReviewRequests.Nodes {
-			s.WriteString(fmt.Sprintf("%s", r.RequestedReviewer.User.Login))
-			s.WriteString("\n")
-		}
-
-		s.WriteString(m.changedFiles)
-		s.WriteString("\n")
-
-		return docStyle.Render(s.String())
+		return fmt.Sprintf("%s\n%s\n%s", m.headerView(), m.viewport.View(), m.footerView())
 	}
 
 	return "Loading..."
@@ -265,10 +268,58 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
 		m.list.SetSize(msg.Width-h, msg.Height-v)
+
+		headerHeight := lipgloss.Height(m.headerView())
+		footerHeight := lipgloss.Height(m.footerView())
+		verticalMarginHeight := headerHeight + footerHeight
+		if !m.ready {
+			// Since this program is using the full size of the viewport we
+			// need to wait until we've received the window dimensions before
+			// we can initialize the viewport. The initial dimensions come in
+			// quickly, though asynchronously, which is why we wait for them
+			// here.
+			m.viewport = viewport.New(msg.Width, msg.Height-verticalMarginHeight)
+			m.viewport.YPosition = headerHeight
+			m.ready = true
+			// Render the viewport one line below the header.
+			m.viewport.YPosition = headerHeight + 1
+		} else {
+			m.viewport.Width = msg.Width
+			m.viewport.Height = msg.Height - verticalMarginHeight
+		}
+
 	case prMsg:
 		m.prDetails = PullRequestDetails(msg.details)
 		m.changedFiles = msg.changedFiles
 		m.currentView = description
+
+		s := strings.Builder{}
+		s.WriteString(m.prDetails.Title)
+		s.WriteString("\n")
+		s.WriteString(fmt.Sprintf(
+			"%s wants to merge xx commits into %s from %s",
+			m.prDetails.Author.Login,
+			m.prDetails.BaseRefName,
+			m.prDetails.HeadRefName,
+		))
+		s.WriteString("\n")
+
+		body := "No description provided"
+		if m.prDetails.Body != "" {
+			body = m.prDetails.Body
+		}
+		s.WriteString(body)
+		s.WriteString("\n")
+
+		for _, r := range m.prDetails.ReviewRequests.Nodes {
+			s.WriteString(fmt.Sprintf("%s", r.RequestedReviewer.User.Login))
+			s.WriteString("\n")
+		}
+
+		s.WriteString(m.changedFiles)
+		s.WriteString("\n")
+		m.viewport.SetContent(s.String())
+
 	case listMsg:
 		items := make([]list.Item, 0, len(msg))
 		for _, p := range msg {
@@ -296,7 +347,11 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
+	if m.currentView == prs {
+		m.list, cmd = m.list.Update(msg)
+	} else if m.currentView == description {
+		m.viewport, cmd = m.viewport.Update(msg)
+	}
 	return m, cmd
 }
 
@@ -311,7 +366,7 @@ func main() {
 		repo:        repo,
 		currentView: prs,
 	}
-	p := tea.NewProgram(a, tea.WithAltScreen())
+	p := tea.NewProgram(a, tea.WithAltScreen(), tea.WithMouseCellMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("error: %v", err)
 		os.Exit(1)
