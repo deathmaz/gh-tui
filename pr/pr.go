@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/cli/go-gh/pkg/text"
 )
 
 type Author struct {
@@ -47,6 +48,7 @@ type Details struct {
 	Commits        []Commit        `json:"commits"`
 	ReviewRequests []ReviewRequest `json:"reviewRequests"`
 	Files          []File          `json:"files"`
+	CreatedAt      time.Time       `json:"createdAt"`
 }
 
 func (d Details) Render() string {
@@ -57,10 +59,11 @@ func (d Details) Render() string {
 	)
 	s.WriteString("\n")
 	s.WriteString(fmt.Sprintf(
-		"%s wants to merge xx commits into %s from %s",
+		"%s wants to merge xx commits into %s from %s • %s\n",
 		style.Foreground(lipgloss.Color("255")).Bold(true).Render(d.Author.Login),
 		style.Foreground(lipgloss.Color("39")).Render(d.BaseRefName),
 		style.Foreground(lipgloss.Color("39")).Render(d.HeadRefName),
+		FormatCreatedAt(d.CreatedAt),
 	))
 	s.WriteString("\n\n")
 
@@ -127,4 +130,14 @@ func (d Details) Render() string {
 	s.WriteString("\n")
 
 	return s.String()
+}
+
+func FormatCreatedAt(d time.Time) string {
+	ago := time.Now().Sub(d)
+
+	if ago < 3*24*time.Hour {
+		return text.RelativeTimeAgo(time.Now(), d)
+	} else {
+		return fmt.Sprintf("%s", d.Format("02-01-2006"))
+	}
 }

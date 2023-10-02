@@ -54,7 +54,7 @@ var docStyle = lipgloss.NewStyle().Margin(1, 2)
 
 type PullRequest struct {
 	Url         string
-	CreatedAt   string
+	CreatedAt   time.Time
 	Title       string
 	Number      int
 	BaseRefName string
@@ -218,7 +218,7 @@ func (m app) getPrDetails(number int) tea.Msg {
 		"-R",
 		m.repo.NameWithOwner,
 		"--json",
-		"reviewDecision,reviewRequests,reviews,statusCheckRollup,title,url,number,author,baseRefName,body,changedFiles,files,commits,headRefName",
+		"reviewDecision,reviewRequests,reviews,statusCheckRollup,title,url,number,author,baseRefName,body,changedFiles,files,commits,headRefName,createdAt",
 	}
 	stdOut, _, err := gh.Exec(args...)
 	if err != nil {
@@ -345,17 +345,12 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case listMsg:
 		items := make([]list.Item, 0, len(msg))
 		for _, p := range msg {
-			date, _ := time.Parse(time.RFC3339, p.CreatedAt)
 			items = append(items, item{
 				title: fmt.Sprintf("%s", p.Title),
 				desc: fmt.Sprintf(
-					"#%d opened on %d-%02d-%02d %02d:%02d by %s",
+					"#%d opened %s by %s",
 					p.Number,
-					date.Day(),
-					date.Month(),
-					date.Year(),
-					date.Hour(),
-					date.Minute(),
+					pr.FormatCreatedAt(p.CreatedAt),
 					p.Author.Login,
 				),
 				Number: p.Number,
