@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	gh "github.com/cli/go-gh"
 	"github.com/cli/go-gh/pkg/browser"
+	"github.com/cli/go-gh/pkg/repository"
 	"github.com/cli/go-gh/v2/pkg/api"
 	graphql "github.com/cli/shurcooL-graphql"
 	"github.com/deathmaz/gh-tui/pr"
@@ -35,7 +37,6 @@ var (
 )
 
 type Owner struct {
-	Id    string
 	Login string
 }
 
@@ -373,9 +374,28 @@ func (m app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func main() {
-	repo, err := getRepoNameWithOwner()
-	if err != nil {
-		log.Fatal(err)
+	repoFlag := flag.String("R", "", "repository")
+	flag.Parse()
+
+	var r repo
+	var err error
+	if *repoFlag != "" {
+		rp, err := repository.Parse(*repoFlag)
+		if err != nil {
+			log.Fatal(err)
+		}
+		r = repo{
+			Name:          rp.Name(),
+			NameWithOwner: fmt.Sprintf("%s/%s", rp.Owner(), rp.Name()),
+			Owner: Owner{
+				Login: rp.Owner(),
+			},
+		}
+	} else {
+		r, err = getRepoNameWithOwner()
+		if err != nil {
+			log.Fatal(err)
+		}
 	}
 
 	var items []list.Item
@@ -391,7 +411,7 @@ func main() {
 
 	a := app{
 		list:        list,
-		repo:        repo,
+		repo:        r,
 		currentView: prs,
 	}
 	p := tea.NewProgram(a, tea.WithAltScreen(), tea.WithMouseCellMotion())
